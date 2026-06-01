@@ -286,17 +286,24 @@ async function renderHome(app) {
 }
 
 function bookCardHTML(book) {
-  const imgHTML = book.cover_url
-    ? `${coverImg(book.cover_url)}${coverPlaceholder(book.title, book.status)}`
-    : coverPlaceholder(book.title, book.status);
+  const colors = { want_to_read: '#7c3aed', reading: '#d97706', read: '#16a34a' };
+  const bg = colors[book.status] || '#7c3aed';
+  const letter = esc((book.title || '?')[0].toUpperCase());
+
+  const coverHTML = book.cover_url
+    ? `<img class="book-cover" src="${esc(book.cover_url)}" alt="" loading="lazy"
+        onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="book-cover-placeholder" style="background:${bg};display:none">${letter}</div>`
+    : `<div class="book-cover-placeholder" style="background:${bg}">${letter}</div>`;
 
   return `<div class="book-card" data-id="${esc(book.id)}">
-    ${imgHTML}
-    <div class="book-info">
+    <div class="book-cover-wrap">${coverHTML}</div>
+    <div class="book-card-body">
       <div class="book-title">${esc(book.title)}</div>
       <div class="book-author">${esc(book.author || '—')}</div>
+      ${book.memo ? `<div class="book-memo">${esc(book.memo)}</div>` : ''}
       <div class="book-meta">
-        <span class="lang-badge">${book.language === 'ja' ? '🇯🇵 JA' : '🇬🇧 EN'}</span>
+        <span class="lang-badge">${book.language === 'ja' ? '🇯🇵' : '🇬🇧'}</span>
         ${book.rating ? `<span class="star-rating">${stars(book.rating)}</span>` : ''}
       </div>
     </div>
@@ -605,14 +612,23 @@ async function renderDetail(app) {
     })
   );
 
-  // Stars
-  document.querySelectorAll('.star').forEach(star =>
+  // Stars — click to rate, hover to preview
+  const starEls = [...document.querySelectorAll('.star')];
+  starEls.forEach(star => {
     star.addEventListener('click', async () => {
       const r = parseInt(star.dataset.star, 10);
       await save({ rating: r });
-      document.querySelectorAll('.star').forEach((s, i) => s.classList.toggle('filled', i < r));
-    })
-  );
+      starEls.forEach((s, i) => s.classList.toggle('filled', i < r));
+    });
+    star.addEventListener('mouseenter', () => {
+      const r = parseInt(star.dataset.star, 10);
+      starEls.forEach((s, i) => s.classList.toggle('filled', i < r));
+    });
+    star.addEventListener('mouseleave', async () => {
+      const cur = await bookStore.get(book.id);
+      starEls.forEach((s, i) => s.classList.toggle('filled', i < (cur.rating || 0)));
+    });
+  });
 
   // Tags
   document.querySelectorAll('.tag-remove').forEach(btn =>
