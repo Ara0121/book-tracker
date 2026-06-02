@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const SHELL_CACHE   = `bk-shell-${CACHE_VERSION}`;
 const COVER_CACHE   = `bk-covers-${CACHE_VERSION}`;
 

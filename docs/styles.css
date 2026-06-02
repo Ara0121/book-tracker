@@ -374,7 +374,7 @@ a { color: var(--accent); text-decoration: none; }
 .book-cover-wrap {
   position: relative;
   width: 100%;
-  aspect-ratio: 2 / 3;
+  height: 110px;
   background: var(--border);
   overflow: hidden;
 }
@@ -1273,7 +1273,7 @@ a { color: var(--accent); text-decoration: none; }
 .rec-cover-wrap {
   position: relative;
   width: 100%;
-  aspect-ratio: 2 / 3;
+  height: 110px;
   background: var(--border);
   overflow: hidden;
 }
