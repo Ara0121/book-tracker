@@ -3,11 +3,13 @@ import { bookStore, metaStore } from './store.js';
 import { verifyRepo, fetchBooksJson } from './github.js';
 import { extractISBN, lookupISBN, searchTitle, hasCJK } from './openlibrary.js';
 import { scheduleSync, flush, pullAndMerge } from './sync.js';
+import { renderDiscover } from './discover.js';
+import { renderStats } from './stats.js';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const S = {
-  screen:   'loading',   // loading | settings | home | add | detail
+  screen:   'loading',   // loading | settings | home | add | detail | discover
   detailId: null,
   filter:   { lang: 'all', query: '' },
   syncing:  false,
@@ -65,6 +67,8 @@ function render() {
   if (S.screen === 'home')     { renderHome(app); return; }
   if (S.screen === 'add')      { app.innerHTML = renderAdd();      bindAdd();     return; }
   if (S.screen === 'detail')   { renderDetail(app); return; }
+  if (S.screen === 'discover') { launchDiscover(app); return; }
+  if (S.screen === 'stats')    { launchStats(app);    return; }
 }
 
 // ── Sync indicator ────────────────────────────────────────────────────────────
@@ -201,11 +205,37 @@ async function renderHome(app) {
   const reading = byStatus('reading');
   const read    = byStatus('read');
 
-  // Stats (unfiltered, current year)
-  const yr       = new Date().getFullYear();
-  const yearRead = allBooks.filter(b => b.status === 'read' && (b.date_finished || '').startsWith(yr));
-  const enCount  = yearRead.filter(b => b.language === 'en').length;
-  const jaCount  = yearRead.filter(b => b.language === 'ja').length;
+  // Monthly goal
+  const nowD       = new Date();
+  const monthKey   = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}`;
+  const goalTarget = (await metaStore.get('goal_count')) || 0;
+  const monthDone  = allBooks.filter(b =>
+    b.status === 'read' && (b.date_finished || '').startsWith(monthKey)
+  ).length;
+  const daysInMonth = new Date(nowD.getFullYear(), nowD.getMonth()+1, 0).getDate();
+  const daysLeft    = daysInMonth - nowD.getDate();
+  const elapsedFrac = nowD.getDate() / daysInMonth;
+  const onTrack     = goalTarget === 0 || monthDone >= Math.floor(elapsedFrac * goalTarget);
+  const goalPct     = goalTarget > 0 ? Math.min(monthDone / goalTarget, 1) : 0;
+  const r = 28, circ = +(2 * Math.PI * r).toFixed(2);
+  const ringColor   = goalPct >= 1 ? '#16a34a' : onTrack ? '#7c3aed' : '#d97706';
+  const ringOffset  = +(circ * (1 - goalPct)).toFixed(2);
+
+  // Quote of the day (deterministic per day)
+  const booksWithQuotes = allBooks.filter(b => b.quotes?.length);
+  let quoteHTML = '';
+  if (booksWithQuotes.length) {
+    const day = Math.floor(Date.now() / 86400000);
+    const book = booksWithQuotes[day % booksWithQuotes.length];
+    const quote = book.quotes[day % book.quotes.length];
+    quoteHTML = `<div class="quote-widget">
+      <span class="quote-mark">❝</span>
+      <div class="quote-inner">
+        <p class="quote-text">${esc(quote)}</p>
+        <p class="quote-source">— ${esc(book.title)}</p>
+      </div>
+    </div>`;
+  }
 
   const sections = [
     { key: 'want_to_read', icon: '📚', label: 'Want to Read', items: want    },
@@ -218,16 +248,47 @@ async function renderHome(app) {
     <header class="app-header">
       <h1 class="header-title">Book<span>Kit</span></h1>
       <span id="sync-badge">${syncBadgeHTML()}</span>
+      <button class="icon-btn" id="stats-btn"    title="Stats">📊</button>
+      <button class="icon-btn" id="discover-btn" title="Discover books">🔍</button>
       <button class="icon-btn" id="settings-btn" title="Settings">⚙️</button>
     </header>
     <div class="home-body">
-      <div class="stats-strip">
-        ${yr}: <span class="stats-count">${yearRead.length}</span> books read
-        ${yearRead.length ? `<span class="stats-sep">·</span>
-          <span class="stats-lang">🇬🇧 ${enCount} EN</span>
-          <span class="stats-sep">·</span>
-          <span class="stats-lang">🇯🇵 ${jaCount} JA</span>` : ''}
+      <!-- Monthly goal ring -->
+      <div class="goal-widget">
+        <svg class="goal-ring" viewBox="0 0 70 70">
+          <circle cx="35" cy="35" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="6"/>
+          <circle cx="35" cy="35" r="${r}" fill="none" stroke="${ringColor}" stroke-width="6"
+            stroke-dasharray="${circ}" stroke-dashoffset="${ringOffset}"
+            stroke-linecap="round" transform="rotate(-90 35 35)"
+            style="transition:stroke-dashoffset 0.6s ease"/>
+          <text x="35" y="32" text-anchor="middle" font-size="14" font-weight="800"
+            fill="#1c1917">${monthDone}</text>
+          <text x="35" y="44" text-anchor="middle" font-size="9" fill="#a8a29e">
+            of ${goalTarget || '?'}
+          </text>
+        </svg>
+        <div class="goal-info">
+          <div class="goal-title">
+            ${nowD.toLocaleDateString('en',{month:'long'})} Goal
+          </div>
+          <div class="goal-sub">
+            ${goalTarget > 0
+              ? `${daysLeft}d left · <span class="${onTrack?'goal-ok':'goal-behind'}">${onTrack?'On track ✓':'Behind'}</span>`
+              : '<span class="goal-unset">Tap ✏️ to set a goal</span>'}
+          </div>
+        </div>
+        <button class="goal-edit-btn" id="goal-edit-btn" title="Edit goal">✏️</button>
       </div>
+      <!-- Goal edit panel (hidden by default) -->
+      <div class="goal-edit-panel" id="goal-edit-panel" hidden>
+        <label class="form-label">Monthly goal (books)</label>
+        <div class="input-row" style="margin-top:6px">
+          <input id="goal-input" class="form-input" type="number" min="1" max="99"
+            placeholder="e.g. 4" value="${goalTarget || ''}">
+          <button class="primary-btn" id="goal-save-btn" style="flex-shrink:0;padding:11px 16px">Save</button>
+        </div>
+      </div>
+      ${quoteHTML}
       <div class="filter-bar">
         <input class="search-input" id="search-input" type="search"
           placeholder="Search title or author…" value="${esc(S.filter.query)}">
@@ -258,7 +319,23 @@ async function renderHome(app) {
 
   // Events
   document.getElementById('add-btn').addEventListener('click', () => go('add'));
+  document.getElementById('discover-btn').addEventListener('click', () => go('discover'));
+  document.getElementById('stats-btn').addEventListener('click', () => go('stats'));
   document.getElementById('settings-btn').addEventListener('click', () => go('settings'));
+
+  // Goal ring edit
+  document.getElementById('goal-edit-btn').addEventListener('click', () => {
+    const panel = document.getElementById('goal-edit-panel');
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) document.getElementById('goal-input').focus();
+  });
+  document.getElementById('goal-save-btn').addEventListener('click', async () => {
+    const val = parseInt(document.getElementById('goal-input').value, 10);
+    if (val > 0) {
+      await metaStore.set('goal_count', val);
+      renderHome(app);
+    }
+  });
 
   document.getElementById('search-input').addEventListener('input', e => {
     S.filter.query = e.target.value;
@@ -563,6 +640,19 @@ async function renderDetail(app) {
       </div>
 
       <div class="detail-section">
+        <div class="detail-section-label">Quotes ❝</div>
+        <div class="quotes-list" id="quotes-list">
+          ${(book.quotes||[]).map((q,i) => `
+            <div class="quote-item" data-idx="${i}">
+              <p class="quote-item-text">${esc(q)}</p>
+              <button class="quote-delete-btn" data-idx="${i}">×</button>
+            </div>`).join('')}
+        </div>
+        <textarea class="quote-input" id="quote-input"
+          placeholder="Paste a memorable quote… (Enter to save)"></textarea>
+      </div>
+
+      <div class="detail-section">
         <div class="detail-section-label">Dates</div>
         <div class="dates-grid">
           <div class="date-row">
@@ -660,6 +750,30 @@ async function renderDetail(app) {
     memoTimer = setTimeout(() => save({ memo: e.target.value }), 800);
   });
 
+  // Quotes — Ctrl/Cmd+Enter or Shift+Enter to save; × to delete
+  const quoteInput = document.getElementById('quote-input');
+  quoteInput.addEventListener('keydown', async e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+      e.preventDefault();
+      const text = quoteInput.value.trim();
+      if (!text) return;
+      const cur = await bookStore.get(book.id);
+      await save({ quotes: [...(cur.quotes || []), text] });
+      quoteInput.value = '';
+      renderDetail(app);
+    }
+  });
+
+  document.querySelectorAll('.quote-delete-btn').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const cur = await bookStore.get(book.id);
+      const quotes = (cur.quotes || []).filter((_, i) => i !== idx);
+      await save({ quotes });
+      renderDetail(app);
+    })
+  );
+
   // Dates
   document.getElementById('date-started').addEventListener('change', e =>
     save({ date_started: e.target.value ? e.target.value + 'T00:00:00.000Z' : null })
@@ -676,6 +790,44 @@ async function renderDetail(app) {
     await flush();
     go('home');
   });
+}
+
+// ── Screen: Stats ────────────────────────────────────────────────────────────
+
+async function launchStats(app) {
+  const allBooks = await bookStore.getAll();
+  renderStats(app, go, allBooks);
+}
+
+// ── Screen: Discover ─────────────────────────────────────────────────────────
+
+async function launchDiscover(app) {
+  const allBooks = await bookStore.getAll();
+  const existingTitles = new Set(allBooks.map(b => b.title.toLowerCase().trim()));
+
+  async function addBookFn(rec) {
+    const id = uuid();
+    const book = {
+      id,
+      title:         rec.title,
+      author:        rec.author || '',
+      isbn:          rec.isbn   || null,
+      cover_url:     rec.cover_url || null,
+      language:      rec.language,
+      status:        'want_to_read',
+      date_added:    now(),
+      date_started:  null,
+      date_finished: null,
+      rating:        null,
+      memo:          '',
+      tags:          [],
+    };
+    await bookStore.put(book);
+    await metaStore.set('pending', true);
+    scheduleSync();
+  }
+
+  await renderDiscover(app, go, addBookFn, existingTitles);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

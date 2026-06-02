@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v3';
 const SHELL_CACHE   = `bk-shell-${CACHE_VERSION}`;
 const COVER_CACHE   = `bk-covers-${CACHE_VERSION}`;
 
@@ -13,6 +13,8 @@ const SHELL_ASSETS = [
   './github.js',
   './openlibrary.js',
   './sync.js',
+  './discover.js',
+  './stats.js',
   './manifest.json',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',
